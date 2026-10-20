@@ -4,6 +4,7 @@ import os
 import sqlite3
 from datetime import datetime, timedelta
 
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -19,8 +20,9 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 # Налаштування логування
 logging.basicConfig(level=logging.INFO)
 
-# Безпечне отримання токена з налаштувань Render (Environment)
+# Безпечне отримання токена та порта з налаштувань Render
 TOKEN = os.getenv("BOT_TOKEN")
+PORT = int(os.getenv("PORT", 10000))
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -61,7 +63,6 @@ class TaskStates(StatesGroup):
 
 
 # --- КЛАВІАТУРИ ---
-# Головне меню тепер знизу екрана (ReplyKeyboardMarkup) з фіксацією resize_keyboard=True
 def get_main_keyboard():
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -143,12 +144,14 @@ async def cmd_start(message: types.Message):
 @dp.callback_query(F.data == "back_to_menu")
 async def back_to_menu(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
-    await callback.message.delete()
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
     await callback.message.answer("Головне меню:", reply_markup=get_main_keyboard())
     await callback.answer()
 
 
-# Обробка текстових кнопок нижнього меню
 @dp.message(F.text == "➕ Додати завдання")
 async def text_add_task(message: types.Message, state: FSMContext):
     await message.answer(
@@ -160,7 +163,6 @@ async def text_add_task(message: types.Message, state: FSMContext):
 
 @dp.message(F.text == "📋 Переглянути матрицю")
 async def text_show_matrix(message: types.Message):
-    # Викликаємо логіку матриці
     await show_matrix_handler(message)
 
 
@@ -357,7 +359,7 @@ async def send_reminder(user_id, task_text, task_id):
         logging.error(f"Помилка відправки нагадування: {e}")
 
 
-# --- НОВА ФУНКЦІЯ: НАГАДУВАННЯ КОЖНІ 3 ДНІ (ПЛАНУВАЛЬНИК) ---
+# --- НАГАДУВАННЯ КОЖНІ 3 ДНІ ---
 async def send_three_day_reminder():
     conn = sqlite3.connect("eisenhower.db")
     cursor = conn.cursor()
@@ -370,7 +372,7 @@ async def send_three_day_reminder():
         try:
             await bot.send_message(
                 chat_id=user_id,
-                text="🔔 **Нагадування (кожні 3 дні):** Час перевірити та актуалізуйте свою Матрицю Ейзенхауера!",
+                text="🔔 **Нагадування (кожні 3 дні):** Час перевірити та актуалізувати свою Матрицю Ейзенхауера!",
                 reply_markup=get_main_keyboard(),
                 parse_mode="Markdown",
             )
@@ -418,14 +420,18 @@ async def process_frequency(callback: types.CallbackQuery, state: FSMContext):
     }
 
     await state.clear()
-    await callback.message.edit_text(
-        f"✅ **Завдання збережено!**\n\n"
-        f"📌 Завдання: {task_text}\n"
-        f"📅 Дедлайн: {deadline_date}\n"
-        f"⏰ Час нагадування: {time_str}\n"
-        f"🔄 Частота: {freq_names.get(freq, freq)}",
-        parse_mode="Markdown",
-    )
+    try:
+        await callback.message.edit_text(
+            f"✅ **Завдання збережено!**\n\n"
+            f"📌 Завдання: {task_text}\n"
+            f"📅 Дедлайн: {deadline_date}\n"
+            f"⏰ Час нагадування: {time_str}\n"
+            f"🔄 Частота: {freq_names.get(freq, freq)}",
+            parse_mode="Markdown",
+        )
+    except Exception:
+        pass
+
     await callback.message.answer(
         "Головне меню:", reply_markup=get_main_keyboard()
     )
@@ -480,7 +486,6 @@ async def show_matrix_handler(message_or_callback):
 
     matrix_kb = InlineKeyboardMarkup(inline_keyboard=inline_kb)
 
-    # Перевіряємо, чи це CallbackQuery чи звичайне Message від кнопки меню
     if isinstance(message_or_callback, types.CallbackQuery):
         await message_or_callback.message.edit_text(
             response, reply_markup=matrix_kb, parse_mode="Markdown"
@@ -532,18 +537,37 @@ async def clear_tasks(callback: types.CallbackQuery):
     conn.commit()
     conn.close()
 
-    await callback.message.edit_text(
-        "🗑 Усі завдання та нагадування скасовано!",
-        reply_markup=get_main_keyboard(),
-    )
+    try:
+        await callback.message.edit_text(
+            "🗑 Усі завдання та нагадування скасовано!",
+            reply_markup=get_main_keyboard(),
+        )
+    except Exception:
+        pass
     await callback.answer()
 
 
-# --- ЗАПУСК БОТА ---
+# --- ЗАГЛУШКА ВЕБ-СЕРВЕРА ДЛЯ RENDER ---
+async def handle_ping(request):
+    return web.Response(text="Bot is running!")
+
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+
+
+# --- ЗАПУСК БОТА ТА СЕРВЕРА ---
 async def main():
-    # Запускаємо планувальник та додаємо регулярну задачу нагадування кожні 3 дні
     scheduler.add_job(send_three_day_reminder, "interval", days=3)
     scheduler.start()
+
+    # Запускаємо веб-сервер, щоб Render бачив відкритий порт
+    await start_web_server()
 
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
