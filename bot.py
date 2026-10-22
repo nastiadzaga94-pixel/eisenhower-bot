@@ -26,6 +26,7 @@ TOKEN = os.getenv("BOT_TOKEN")
 PORT = int(os.getenv("PORT", 10000))
 
 bot = Bot(token=TOKEN)
+
 # Налаштовуємо збереження завдань у базу SQLite
 jobstores = {'default': SQLAlchemyJobStore(url='sqlite:///eisenhower.db')}
 
