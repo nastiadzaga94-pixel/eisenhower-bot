@@ -16,6 +16,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 
 # Налаштування логування
 logging.basicConfig(level=logging.INFO)
@@ -25,9 +26,11 @@ TOKEN = os.getenv("BOT_TOKEN")
 PORT = int(os.getenv("PORT", 10000))
 
 bot = Bot(token=TOKEN)
-dp = Dispatcher()
-scheduler = AsyncIOScheduler()
+# Налаштовуємо збереження завдань у базу SQLite
+jobstores = {'default': SQLAlchemyJobStore(url='sqlite:///eisenhower.db')}
 
+scheduler = AsyncIOScheduler(jobstores=jobstores, timezone='Europe/Kyiv') 
+dp = Dispatcher()
 
 # --- РОБОТА З БАЗОЮ ДАНИХ ---
 def init_db():
@@ -475,7 +478,7 @@ async def show_matrix_handler(message_or_callback):
                 inline_kb.append(
                     [
                         InlineKeyboardButton(
-                            text=f"❌ Видалити: {t_desc[:22]}...",
+                            text=f"✅ Виконано: {t_desc[:22]}...",
                             callback_data=f"del_{t_id}",
                         )
                     ]
